@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gesture Controlled Particle System</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        /* Mirrored, styled webcam preview in the bottom-right corner */
+        #webcam {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 200px;
+            height: auto;
+            border-radius: 12px;
+            border: 2px solid #00ffcc;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+            transform: scaleX(-1); /* Mirrors the stream for natural movement */
+            z-index: 10;
+            background: #222;
+        }
+        /* UI Overlay for feedback */
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            z-index: 10;
+        }
+        h1 { margin: 0 0 5px 0; font-size: 24px; letter-spacing: 1px; color: #00ffcc; }
+        .status { font-size: 14px; margin-bottom: 5px; opacity: 0.8; }
+        .gesture-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            font-weight: bold;
+            border-left: 4px solid #00ffcc;
+        }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <video id="webcam" autoplay playsinline></video>
+
+    <div id="ui-overlay">
+        <h1>Gesture Particle Matrix</h1>
+        <div class="status" id="hand-status">Hand: Detecting...</div>
+        <div class="status" id="distance-status">Distance: --</div>
+        <div class="gesture-badge" id="shape-status">Shape: Cosmos</div>
+    </div>
+
+    <script>
+        // --- 1. GLOBAL VARIABLES & CONFIG ---
+        const PARTICLE_COUNT = 15000;
+        let scene, camera, renderer, particleGeometry, particleSystem;
+        let positions = new Float32Array(PARTICLE_COUNT * 3);
+        let colors = new Float32Array(PARTICLE_COUNT * 3);
+        let targetPositions = new Float32Array(PARTICLE_COUNT * 3);
+        
+        // Shape Templates Array
+        const shapes = ['Cosmos', 'Heart', 'Flower', 'Saturn', 'Fireworks'];
+        let currentShapeIndex = 0;
+        let punchCooldown = false;
+
+        // --- 2. THREE.JS INITIALIZATION ---
+        function initThree() {
+            const container = document.getElementById('canvas-container');
+            
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.015);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 15;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            // Generate initial random particles
+            generateShape('Cosmos');
+
+            particleGeometry = new THREE.BufferGeometry();
+            particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            particleGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            // Custom glowing particle texture via Canvas
+            const texture = createParticleTexture();
+
+            const particleMaterial = new THREE.PointsMaterial({
+                size: 0.12,
+                map: texture,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                vertexColors: true
+            });
+
+            particleSystem = new THREE.Points(particleGeometry, particleMaterial);
+            scene.add(particleSystem);
+
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        function createParticleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            gradient.addColorStop(0, 'rgba(255,255,255,1)');
+            gradient.addColorStop(0.2, 'rgba(0,255,255,0.8)');
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 32, 32);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        // --- 3. MATH FORMULAS FOR SHAPES ---
+        function generateShape(shapeName) {
+            const colorObj = new THREE.Color();
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+                let x = 0, y = 0, z = 0;
+
+                if (shapeName === 'Cosmos') {
+                    x = (Math.random() - 0.5) * 20;
+                    y = (Math.random() - 0.5) * 20;
+                    z = (Math.random() - 0.5) * 20;
+                    colorObj.setHSL(0.5 + Math.random() * 0.1, 1.0, 0.5);
+                } 
+                else if (shapeName === 'Heart') {
+                    const t = Math.PI * 2 * (i / PARTICLE_COUNT) * (Math.random() * 10);
+                    const phi = Math.acos((Math.random() * 2) - 1);
+                    
+                    const xt = 16 * Math.pow(Math.sin(t), 3);
+                    const yt = 13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t);
+                    
+                    x = xt * 0.3;
+                    y = yt * 0.3;
+                    z = (Math.random() - 0.5) * 4 * Math.sin(phi);
+                    colorObj.setHSL(0.95, 1.0, 0.6);
+                } 
+                else if (shapeName === 'Flower') {
+                    const theta = i * 0.1;
+                    const r = 0.08 * Math.sqrt(i) * (1 + 0.3 * Math.sin(6 * theta));
+                    x = r * Math.cos(theta);
+                    y = r * Math.sin(theta);
+                    z = (Math.random() - 0.5) * 2;
+                    colorObj.setHSL(0.12 + (i / PARTICLE_COUNT) * 0.1, 1.0, 0.5);
+                } 
+                else if (shapeName === 'Saturn') {
+                    if (i < PARTICLE_COUNT * 0.4) {
+                        const u = Math.random();
+                        const v = Math.random();
+                        const theta = u * 2.0 * Math.PI;
+                        const phi = Math.acos(2.0 * v - 1.0);
+                        const r = 3;
+                        x = r * Math.sin(phi) * Math.cos(theta);
+                        y = r * Math.sin(phi) * Math.sin(theta);
+                        z = r * Math.cos(phi);
+                        colorObj.setHSL(0.08, 0.8, 0.5);
+                    } else {
+                        const r = 5 + Math.random() * 6;
+                        const theta = Math.random() * Math.PI * 2;
+                        x = r * Math.cos(theta);
+                        y = (Math.random() - 0.5) * 0.2;
+                        z = r * Math.sin(theta);
+                        colorObj.setHSL(0.6, 0.9, 0.6);
+                    }
+                } 
+                else if (shapeName === 'Fireworks') {
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos((Math.random() * 2) - 1);
+                    const speed = 4 + Math.random() * 8;
+                    
+                    x = speed * Math.sin(phi) * Math.cos(theta);
+                    y = speed * Math.sin(phi) * Math.sin(theta);
+                    z = speed * Math.cos(phi);
+                    colorObj.setHSL(Math.random(), 1.0, 0.6);
+                }
+
+                if (shapeName === 'Cosmos') {
+                    positions[i3] = x; positions[i3+1] = y; positions[i3+2] = z;
+                }
+                
+                targetPositions[i3] = x;
+                targetPositions[i3+1] = y;
+                targetPositions[i3+2] = z;
+
+                colors[i3] = colorObj.r;
+                colors[i3+1] = colorObj.g;
+                colors[i3+2] = colorObj.b;
+            }
+        }
+
+        // --- 4. ENGINE LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const posAttr = particleGeometry.attributes.position;
+            const colAttr = particleGeometry.attributes.color;
+
+            for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                posAttr.array[i] += (targetPositions[i] - posAttr.array[i]) * 0.08;
+                colAttr.array[i] += (colors[i] - colAttr.array[i]) * 0.1;
+            }
+
+            posAttr.needsUpdate = true;
+            colAttr.needsUpdate = true;
+
+            particleSystem.rotation.y += 0.002;
+            particleSystem.rotation.x += 0.0005;
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- 5. MEDIAPIPE GESTURE PROCESSING ---
+        const videoElement = document.getElementById('webcam');
+        const handStatus = document.getElementById('hand-status');
+        const distanceStatus = document.getElementById('distance-status');
+        const shapeStatus = document.getElementById('shape-status');
+
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                handStatus.innerText = "Hand: Tracking Active";
+                const landmarks = results.multiHandLandmarks[0];
+
+                // A. CALCULATE PALM DISTANCE (Z-AXIS / ZOOM)
+                const wrist = landmarks[0];
+                const middleMCP = landmarks[9];
+                
+                const dx = wrist.x - middleMCP.x;
+                const dy = wrist.y - middleMCP.y;
+                const dz = wrist.z - middleMCP.z;
+                const palmSize = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                // Map palm size to camera Z-depth
+                let targetZ = THREE.MathUtils.mapLinear(palmSize, 0.06, 0.22, 35, 5);
+                targetZ = THREE.MathUtils.clamp(targetZ, 4, 40);
+                
+                camera.position.z += (targetZ - camera.position.z) * 0.1;
+                distanceStatus.innerText = `Distance Zoom Z: ${camera.position.z.toFixed(1)}`;
+
+                // B. DETECT PUNCH / FIST (TRIGGER SHAPE CHANGE)
+                const tipIds = [8, 12, 16, 20];
+                const baseIds = [6, 10, 14, 18];
+                
+                let fingersCurled = 0;
+                for(let i=0; i<4; i++) {
+                    if(landmarks[tipIds[i]].y > landmarks[baseIds[i]].y) {
+                        fingersCurled++;
+                    }
+                }
+
+                if (fingersCurled === 4) {
+                    if (!punchCooldown) {
+                        triggerNextShape();
+                        punchCooldown = true;
+                        setTimeout(() => { punchCooldown = false; }, 1000); 
+                    }
+                }
+
+            } else {
+                handStatus.innerText = "Hand: Out of view";
+            }
+        }
+
+        function triggerNextShape() {
+            currentShapeIndex = (currentShapeIndex + 1) % shapes.length;
+            const nextShape = shapes[currentShapeIndex];
+            shapeStatus.innerText = `Shape: ${nextShape}`;
+            
+            shapeStatus.style.background = '#00ffcc';
+            shapeStatus.style.color = '#000';
+            setTimeout(() => {
+                shapeStatus.style.background = 'rgba(255,255,255,0.1)';
+                shapeStatus.style.color = '#fff';
+            }, 300);
+
+            generateShape(nextShape);
+        }
+
+        // --- 6. SETUP WEBCAM AND MEDIAPIPE PIPELINE ---
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.6,
+            minTrackingConfidence: 0.6
+        });
+        hands.onResults(onResults);
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 640,
+            height: 480
+        });
+
+        initThree();
+        cameraUtils.start();
+
+    </script>
+</body>
+</html>
